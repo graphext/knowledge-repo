@@ -43,9 +43,7 @@
 .renderedMarkdown div.metadata {
     margin-bottom: 1em;
     padding: 10px;
-    background-color: #01a59817;
     border-radius: 5px;
-    border: 1px solid #01a598;
 }
 
 .renderedMarkdown .authors {
