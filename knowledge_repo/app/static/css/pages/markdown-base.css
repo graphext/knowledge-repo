@@ -32,7 +32,6 @@
 
 .renderedMarkdown h1:nth-of-type(1) {
   margin-top: 1em;
-  text-align: center;
   display: block;
 }
 
@@ -43,13 +42,15 @@
 
 .renderedMarkdown div.metadata {
     margin-bottom: 1em;
+    padding: 10px;
+    background-color: #01a59817;
+    border-radius: 5px;
+    border: 1px solid #01a598;
 }
 
 .renderedMarkdown .authors {
     margin: auto;
     display: block;
-    width: 80%;
-    text-align: center;
     font-size: 1.5em;
     padding-bottom: 0.8em;
 }
@@ -57,29 +58,24 @@
 .renderedMarkdown .date_created {
     display: block;
     margin: auto;
-    text-align: center;
     font-size: 1.2em;
 }
 
 .renderedMarkdown .date_updated {
     display: block;
     margin: auto;
-    text-align: center;
     font-size: 0.8em;
     font-style: italic;
 }
 
 .renderedMarkdown .tldr {
-    width: 80%;
     padding-top: 1em;
     margin: auto;
     display: block;
     font-style: italic;
-    text-align: justify;
 }
 
 .renderedMarkdown .tags {
-    width: 80%;
     display: block;
     margin: auto;
 }
