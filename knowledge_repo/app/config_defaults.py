@@ -20,6 +20,18 @@ SERVER_NAME = None
 # static.
 SECRET_KEY = None
 
+# Set DEPLOY_HTTPS to True if you want to enable encrypted
+# communication with Flask. When enabled, you must provide
+# your ssl certificate, which consists of a .crt and .key
+# file.
+# Note: Even if you set DEPLOY_HTTPS to True, you still need
+# to set the port to 443 manually.
+DEPLOY_HTTPS = False
+SSL_CERT = {
+    'cert': '/path/to/cert',
+    'key': '/path/to/key'
+}
+
 # ---------------------------------------------------
 # Debug configuration
 # ---------------------------------------------------
@@ -51,7 +63,8 @@ DB_AUTO_UPGRADE = False
 # in a variety of different ways. You can create your own subclass of
 # `KnowledgeAuthProvider` and add either the instance or identifier
 # used for that class below.
-# By default, the knowledge repo offers: ['debug', 'bitbucket', 'github', 'google']
+# By default, the knowledge repo offers:
+# ['debug', 'oauth2', 'bitbucket', 'github', 'google']
 AUTH_PROVIDERS = []
 
 # If you are going to use a OAuth provider, you will need to specify client ids
@@ -59,22 +72,106 @@ AUTH_PROVIDERS = []
 # `OAuth2Provider` and adding them to the above list, or by specifying OAuth
 # connection properties as demonstrated below for the GitHub authenticator.
 # OAUTH_GITHUB_CLIENT_ID = '<client id>'
-# OAUTH_GITHUB_CLIENT_SECRET = '<client_secret>'
+# OAUTH_GITHUB_CLIENT_SECRET = '<client secret>'
 
-# You can also forgo a fully-fledged sign in process for users
-# by hosting the knowledge repository behind a proxy server that
-# pre-authenticates users, and adds the appropriate user identifier
-# to the http headers of the request. If the headers are
-# specified below, then they take precedence over any other forms
-# of authentication. If they are specified but not populated, then
-# the authentication flow will fall back to use any of the providers
-# specified above.
+# To configure a generic OAuth provider that is not one of the presets
+# provided, you may use the provider 'oauth2' which creates an empty,
+# unconfigured OAuth2Provider. You must then override its configuration.
+# For example, for a self-managed Gitlab CE instance at gitlab.example.com:
+
+# OAUTH_OAUTH2_BASE_URL = 'https://gitlab.example.com/api/v4/'
+# OAUTH_OAUTH2_AUTHORIZATION_URL = 'https://gitlab.example.com/oauth/authorize'
+# OAUTH_OAUTH2_TOKEN_URL = 'https://gitlab.example.com/oauth/token'
+# OAUTH_OAUTH2_AUTO_REFRESH_URL = 'https://gitlab.example.com/oauth/token'
+# OAUTH_OAUTH2_SCOPES = 'api'
+# OAUTH_OAUTH2_USER_INFO_ENDPOINT = 'user'
+# OAUTH_OAUTH2_USER_INFO_MAPPING = {
+#     'identifier': 'username',
+#     'name': 'name',
+#     'avatar_uri': 'avatar_url'
+# }
+# OAUTH_OAUTH2_VERIFY_SSL_CERTS = '/path/to/certs/my.ca-bundle'
+# OAUTH_OAUTH2_CLIENT_ID = '<client id>'
+# OAUTH_OAUTH2_CLIENT_SECRET = '<client secret>'
+
+# The configuration OAUTH_<name>_VERIFY_SSL_CERTS is what is passed to the
+# 'verify' parameter in the Requests module, and can be used to disable
+# HTTPS verification (not recommended) or provide a custom CA bundle. See:
+# http://docs.python-requests.org/en/master/user/advanced/#ssl-cert-verification
+
+# You may also override the .validate() method of a KnowledgeAuthProvider
+# to perform an additional validation step before authenticating a user.
+# The following example checks whether a user has access to the git remote
+# of the local Knowledge Repository:
+
+# def OAUTH_OAUTH2_VALIDATE(provider, user):
+#
+#     if provider.app.repository.git_has_remote:
+#
+#         url_parts = (
+#             provider.app.repository.git_remote.url.split(':')
+#             )
+#
+#         url_subparts = url_parts[1].split('/')
+#
+#         if url_parts[0] == "git@gitlab.example.com":
+#             git_project = (
+#                 url_subparts[0] + "%2F" + url_subparts[1].split('.')[0])
+#         elif (
+#             url_parts[0] == "https"
+#             and url_subparts[2] == "gitlab.example.com"
+#         ):
+#             git_project = (
+#                 url_subparts[3] + "%2F" + url_subparts[4].split('.')[0])
+#         else:
+#             provider.app.logger.warning(
+#                 "User validation failed: unexpected git remote url ["
+#                 + provider.app.repository.git_remote.url + "]")
+#             return False
+#
+#         user_validate_url = provider.base_url + "projects/" + git_project
+#
+#         resp = provider.oauth_client.get(
+#             user_validate_url,
+#             verify=OAUTH_OAUTH2_VERIFY_HTTPS)
+#
+#         if resp.status_code == 200:
+#             return True
+#         else:
+#             provider.app.logger.warning(
+#                 "User validation failed: validation URL ["
+#                 + user_validate_url + "] returned HTTP status ["
+#                 + str(resp.status_code) + "]")
+
+# You can also forgo a fully-fledged sign in process for users by hosting the
+# knowledge repository behind a proxy server that pre-authenticates users, and
+# adds the appropriate user identifier to the http headers of the request. If
+# enabled below, then they take precedence over any other forms of
+# authentication. If the call to `AUTH_MAP_REQUEST_HEADERS` results in a null
+# user identifier, then the authentication flow will fall back to use any of the
+# providers specified above.
+AUTH_USE_REQUEST_HEADERS = False
+
+
+# If using headers to authenticate, the following function should be implemented
+# to transform a dictionary of headers into a dictionary of user attributes.
+# Currently only 'identifier', 'avatar_uri', 'name' and 'email' are supported.
+# If this method returns `None`, or `identifier` is not supplied, then the
+# authorization flow will fall back to other authentication methods.
+def AUTH_MAP_REQUEST_HEADERS(headers):
+    return {
+        # 'identifier': None,
+        # 'avatar_uri': None,
+        # 'name': None,
+        # 'email': None
+    }
+
+
+# The following AUTH_USER_IDENTIFIER* configuration keys are deprecated and
+# will be removed in v0.9.
 AUTH_USER_IDENTIFIER_REQUEST_HEADER = None
 
 
-# If the identifier used above needs some transformation to match the canonical
-# identifier format used in this repository, you can specify a mapping using
-# the below config option.
 def AUTH_USER_IDENTIFIER_REQUEST_HEADER_MAPPING(identifier):
     return identifier
 
@@ -115,6 +212,9 @@ POLICY_ANONYMOUS_VIEW_POST = True
 # Should anonymous users be able to view overall statistics
 POLICY_ANONYMOUS_VIEW_STATS = True
 
+# Should anonymous users be able to download posts (or their source)
+POLICY_ANONYMOUS_DOWNLOADS = False
+
 
 # ---------------------------------------------------
 # Repository configuration
@@ -152,7 +252,7 @@ def prepare_repo(repo):
 # a sync lock is put in place and the responsible process is considered to be
 # the primary agent responsible for syncing until its last update is longer than
 # `INDEXING_TIMEOUT` seconds, whereby the lock is ceded to the next requesting
-# process. Note that `INDEXING_INTERVAL` must be larger than `INDEXING_TIMEOUT`
+# process. Note that `INDEXING_TIMEOUT` must be larger than `INDEXING_INTERVAL`
 # or strange things might begin to happen.
 INDEXING_INTERVAL = 5 * 60  # 5 minutes
 INDEXING_TIMEOUT = 10 * 60  # 10 minutes

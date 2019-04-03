@@ -1,7 +1,7 @@
 import logging
 import os
 from builtins import str
-from flask import request, url_for, redirect, render_template, current_app, Blueprint, g, Response
+from flask import request, url_for, redirect, render_template, current_app, Blueprint, g, Response, abort
 
 from .. import permissions
 from ..proxies import db_session, current_repo, current_user
@@ -54,8 +54,8 @@ def render(path):
                               .filter(Post.path == knowledge_aliases[path])
                               .first())
     if not post:
-        raise Exception(u"unable to find post at {}".format(path))
-
+        logger.warning(u"unable to find post at {}".format(path))
+        return abort(404)
     if post.contains_excluded_tag:
         # It's possible that someone gets a direct link to a post that has an excluded tag
         return render_template("error.html")
@@ -72,7 +72,7 @@ def render(path):
     for comment in comments:
         author = db_session.query(User).filter(User.id == comment.user_id).first()
         if author is not None:
-            comment.author = author.identifier
+            comment.author = author.format_name
         else:
             comment.author = 'Anonymous'
         if mode != 'raw':
@@ -112,7 +112,8 @@ def render(path):
                                table_id=None,
                                is_private=(post.private == 1),
                                is_author=is_author,
-                               downloads=post.kp.src_paths if permissions.post_download.can() else None)
+                               can_download=permissions.post_download.can(),
+                               downloads=post.kp.src_paths)
     return rendered
 
 
@@ -179,13 +180,6 @@ def render_legacy():
     return redirect(url_for('.render', path=path), code=302)
 
 
-@blueprint.route('/about', methods=['GET'])
-@PageView.logged
-def about():
-    """Renders about page. This is the html version of REAMDE.md"""
-    return render_template("about.html")
-
-
 @blueprint.route('/ajax/post/download', methods=['GET'])
 @PageView.logged
 @permissions.post_download.require()
@@ -208,7 +202,7 @@ def download():
         assert path is not None, "Source path not provided."
         assert path in post.src_paths, "Provided reference is not a valid source path."
         return Response(
-            post.read_ref(path),
+            post._read_ref(path),
             mimetype="application/octet-stream",
             headers={u"Content-disposition": "attachment; filename={}".format(os.path.basename(path))})
     else:

@@ -1,34 +1,34 @@
 from __future__ import absolute_import
 
-import multiprocessing
-import time
-import atexit
 import os
 import imp
 import logging
 import traceback
 import math
-import multiprocessing
 import uuid
+import mimetypes
 
-from flask import Flask, current_app, render_template, g, request, flash, redirect, url_for
+import six
+from flask import Flask, current_app, render_template, request, session
 from flask_login import LoginManager, user_loaded_from_request
 from flask_mail import Mail
 from flask_migrate import Migrate
-from flask_principal import Principal, identity_loaded, identity_changed, Identity, RoleNeed, UserNeed, AnonymousIdentity, PermissionDenied
+from flask_principal import Principal, identity_loaded, Identity, AnonymousIdentity, PermissionDenied
 from alembic import command
 from alembic.migration import MigrationContext
 from datetime import datetime
 from werkzeug import url_encode
 
 import knowledge_repo
-from . import roles, routes
+from . import routes
 from .auth_provider import KnowledgeAuthProvider
 from .proxies import db_session, current_repo, current_user
 from .index import update_index, set_up_indexing_timers, time_since_index, time_since_index_check
-from .models import db as sqlalchemy_db, Post, User, Tag
+from .models import db as sqlalchemy_db, User, Tag
 from .utils.auth import AnonymousKnowledgeUser, populate_identity_roles, prepare_user
 
+# Needed to serve svg with correct mime type over https
+mimetypes.add_type('image/svg+xml', '.svg')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +44,7 @@ class KnowledgeFlask(Flask):
         # Add unique identifier for this application isinstance
         self.uuid = str(uuid.uuid4())
         if 'KNOWLEDGE_REPO_MASTER_UUID' not in os.environ:
+            logger.info("Set KNOWLEDGE_REPO_MASTER_UUID to '{}'.".format(self.uuid))
             os.environ['KNOWLEDGE_REPO_MASTER_UUID'] = self.uuid
 
         # Preload default configuration
@@ -51,7 +52,7 @@ class KnowledgeFlask(Flask):
 
         # Load configuration from file or provided object
         if config:
-            if isinstance(config, str):
+            if isinstance(config, six.string_types):
                 config = imp.load_source('knowledge_server_config', os.path.abspath(config))
             self.config.from_object(config)
 
@@ -92,6 +93,13 @@ class KnowledgeFlask(Flask):
         elif db_auto_upgrade:
             self.db_upgrade()
 
+        # Ensure that indexes are set up if required by the time first page is
+        # served.
+        @self.before_first_request
+        def start_indexing():
+            if self.config['INDEXING_ENABLED']:
+                self.start_indexing()
+
         # Initialise login manager to keep track of user sessions
         LoginManager().init_app(self)
         self.login_manager.login_view = 'auth.login'
@@ -101,8 +109,22 @@ class KnowledgeFlask(Flask):
         def load_user(user_id):
             return User(identifier=user_id)
 
-        # Attempt login via http headers if header is specified
-        if self.config.get('AUTH_USER_IDENTIFIER_REQUEST_HEADER'):
+        # Attempt login via http headers
+        if self.config.get('AUTH_USE_REQUEST_HEADERS'):
+            @self.login_manager.request_loader
+            def load_user_from_request(request):
+                user_attributes = current_app.config.get('AUTH_MAP_REQUEST_HEADERS')(request.headers)
+                if isinstance(user_attributes, dict) and user_attributes.get('identifier', None):
+                    user = User(identifier=user_attributes['identifier'])
+                    user.can_logout = False
+                    for attribute in ['avatar_uri', 'email', 'name']:
+                        if user_attributes.get(attribute):
+                            setattr(user, attribute, user_attributes[attribute])
+                    user = prepare_user(user, session_start=False)
+                    return user
+        elif self.config.get('AUTH_USER_IDENTIFIER_REQUEST_HEADER'):
+            logger.warning("AUTH_USER_IDENTIFIER* configuration keys are deprecated and will be removed in v0.9.0 .")
+
             @self.login_manager.request_loader
             def load_user_from_request(request):
                 identifier = request.headers.get(current_app.config['AUTH_USER_IDENTIFIER_REQUEST_HEADER'])
@@ -132,8 +154,8 @@ class KnowledgeFlask(Flask):
 
         @self.errorhandler(PermissionDenied)
         def handle_insufficient_permissions(error):
-            flash("You have insufficient permissions to access this resource.")
-            return render_template('base.html'), 403
+            session['requested_url'] = request.url
+            return render_template('permission_denied.html'), 403
 
         # Add mail object if configuration is supplied
         if self.config.get('MAIL_SERVER'):
@@ -166,6 +188,10 @@ class KnowledgeFlask(Flask):
             else:
                 return render_template('error.html')
 
+        @self.errorhandler(404)
+        def show_404(self):
+            return render_template("404.html")
+
         @self.before_first_request
         def ensure_excluded_tags_exist():
             # For every tag in the excluded tags, create the tag object if it doesn't exist
@@ -173,9 +199,6 @@ class KnowledgeFlask(Flask):
             for tag in excluded_tags:
                 Tag(name=tag)
             db_session.commit()
-
-        # Set up indexing timers
-        set_up_indexing_timers(self)
 
         @self.before_request
         def open_repository_session():
@@ -276,6 +299,7 @@ class KnowledgeFlask(Flask):
 
             # Stamp table as being current
             command.stamp(self._alembic_config, "head")
+        return self
 
     @property
     def db_revision(self):
@@ -288,14 +312,28 @@ class KnowledgeFlask(Flask):
     def db_upgrade(self):
         with self.app_context():
             command.upgrade(self._alembic_config, "head")
+        return self
+
+    def db_downgrade(self, revision):
+        with self.app_context():
+            command.downgrade(self._alembic_config, revision)
+        return self
 
     def db_migrate(self, message, autogenerate=True):
         with self.app_context():
             command.revision(self._alembic_config, message=message, autogenerate=autogenerate)
+        return self
 
     def db_update_index(self, check_timeouts=True, force=False, reindex=False):
         with self.app_context():
             update_index(check_timeouts=check_timeouts, force=force, reindex=reindex)
+        return self
+
+    def start_indexing(self):
+        if not getattr(self, '_indexing_started', False):
+            set_up_indexing_timers(self)
+            self._indexing_started = True
+        return self
 
     def check_thread_support(self, check_index=True, check_repositories=True):
         # If index database is an sqlite database, it will lock on any write action, and so breaks on multiple threads
